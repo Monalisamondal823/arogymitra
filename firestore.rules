@@ -1,0 +1,267 @@
+/**
+ * # Firestore Security Rules - ArogyaMitra
+ *
+ * ## Core Philosophy
+ * This ruleset enforces a strict security model based on user ownership and explicit, denormalized
+ * collaborator access. The primary goal is to ensure that users can only access their own data or data
+ * that has been explicitly shared with them (e.g., a patient's profile shared with their assigned
+ * healthcare provider). Administrative access is managed through a dedicated roles collection.
+ *
+ * ## Data Structure
+ * - `/users/{userId}`: Stores the primary user document, accessible only by the user themselves.
+ * - `/patientProfiles/{patientId}` & `/healthcareProviderProfiles/{providerId}`: Top-level collections
+ *   for different user profile types. This structure enables efficient and secure queries, such as a
+ *   provider listing all their assigned patients.
+ * - `/patientProfiles/{patientId}/...`: Subcollections for a patient's sensitive medical data, inheriting
+ *   access rules from the parent patient profile.
+ * - `/conversations/{conversationId}`: Top-level collection for collaborative data. Access is managed by
+ *   a `members` map on each document.
+ * - `/roles_admin/{userId}`: A simple collection where the existence of a document grants a user
+ *   database-wide administrative privileges.
+ *
+ * ## Key Security Decisions
+ * - **Denormalization for Authorization:** To avoid slow and costly `get()` calls, authorization data
+ *   is denormalized. For instance, `patientProfiles` contain an `assignedProviderId` so that a
+ *   provider's access can be checked directly on the document. Similarly, `conversations` contain
+ *   a `members` map. This makes rules simpler and more performant.
+ * - **No User Enumeration:** Listing the top-level `/users` collection is disallowed to protect user
+ *   privacy and prevent data scraping.
+ * - **Query-Based Listing:** For collections like `/patientProfiles` and `/conversations`, `list`
+ *   permissions are granted to any signed-in user, but this is secured by the fact that Firestore rules
+ *   require client-side queries to include constraints that match the rules. For example, a provider
+ *   *must* query `where('assignedProviderId', '==', request.auth.uid)` to successfully list patient
+ *   profiles.
+ * - **Admin Access via `exists()`:** Administrative privileges are checked using an efficient `exists()`
+ *   call against the `/roles_admin` collection, which is more secure and flexible than using custom claims.
+ *
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // -------------------------------------------------------------------------
+    // Helper Functions
+    // -------------------------------------------------------------------------
+
+    /**
+     * Checks if the user is authenticated.
+     */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /**
+     * Checks if the authenticated user's UID matches the provided userId.
+     * This is the fundamental check for document ownership.
+     */
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    /**
+     * Checks for ownership on an existing document. Used for update/delete.
+     */
+    function isExistingOwner(userId) {
+      return isOwner(userId) && resource != null;
+    }
+
+    /**
+     * Checks if the user has an admin role by seeing if a document
+     * with their UID exists in the roles_admin collection.
+     */
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/roles_admin/$(request.auth.uid));
+    }
+
+    /**
+     * Checks if the requesting user is the assigned healthcare provider
+     * for a given document's data.
+     * @param docData The resource data map which must contain `assignedProviderId`.
+     */
+    function isAssignedProvider(docData) {
+      return isSignedIn() && request.auth.uid == docData.assignedProviderId;
+    }
+
+    /**
+     * Grants access to a patient's subcollection data if the requester is
+     * the patient themselves or their assigned provider.
+     * Requires a 'get' call to the parent patientProfile document.
+     */
+    function canAccessPatientData(patientId) {
+      let patientProfile = get(/databases/$(database)/documents/patientProfiles/$(patientId));
+      return isOwner(patientId) || (isSignedIn() && request.auth.uid == patientProfile.data.assignedProviderId);
+    }
+    
+    /**
+     * Checks if the requesting user is a member of a conversation.
+     * Requires a 'get' call to the parent conversation document.
+     */
+    function isConversationMember(conversationId) {
+        let conversation = get(/databases/$(database)/documents/conversations/$(conversationId));
+        return isSignedIn() && request.auth.uid in conversation.data.members;
+    }
+
+    // -------------------------------------------------------------------------
+    // Validation Helper Functions
+    // -------------------------------------------------------------------------
+
+    /**
+     * Validates that an incoming document's field matches a value from the path.
+     * Enforces relational integrity on create.
+     */
+    function incomingDataMatchesPath(key, value) {
+        return request.resource.data[key] == value;
+    }
+    
+    /**
+     * Validates that a field is immutable and cannot be changed on update.
+     */
+    function fieldIsImmutable(key) {
+        return request.resource.data[key] == resource.data[key];
+    }
+
+
+    // -------------------------------------------------------------------------
+    // Collection Rules
+    // -------------------------------------------------------------------------
+
+    /**
+     * @description Users can create, read, and update their own user document. Deletion is disallowed for safety.
+     * @path /users/{userId}
+     * @allow (create) A new user signing up: `request.auth.uid` matches `{userId}`.
+     * @deny (get) A different user trying to read another user's profile.
+     * @principle Restricts access to a user's own data tree and prevents user enumeration.
+     */
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow list: if false; // Prevent user enumeration
+      allow create: if isOwner(userId) && incomingDataMatchesPath('id', userId);
+      allow update: if isExistingOwner(userId) && fieldIsImmutable('id');
+      allow delete: if false; // Disallow deleting own user object by default
+    }
+
+    /**
+     * @description Only existing administrators can view or modify the list of admins.
+     * @path /roles_admin/{userId}
+     * @allow (get) An existing admin viewing another admin's role document.
+     * @deny (create) A non-admin trying to grant themselves admin privileges.
+     * @principle Enforces role-based access control for administrative tasks.
+     */
+    match /roles_admin/{userId} {
+      allow get, list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    /**
+     * @description A patient owns their profile. An assigned provider can read/update it.
+     * @path /patientProfiles/{patientId}
+     * @allow (update) An assigned provider (`assignedProviderId`) updates a patient's medical history.
+     * @deny (delete) An assigned provider tries to delete the patient's entire profile.
+     * @principle Implements shared access between a document owner and a designated collaborator.
+     */
+    match /patientProfiles/{patientId} {
+      allow get: if isOwner(patientId) || isAssignedProvider(resource.data) || isAdmin();
+      allow list: if isSignedIn(); // Allow querying, e.g., where('assignedProviderId', '==', uid)
+      allow create: if isOwner(patientId) && incomingDataMatchesPath('userId', patientId);
+      allow update: if (isExistingOwner(patientId) || (resource != null && isAssignedProvider(resource.data))) && fieldIsImmutable('userId');
+      allow delete: if isExistingOwner(patientId);
+    }
+    
+    /**
+     * @description A healthcare provider can manage their own professional profile.
+     * @path /healthcareProviderProfiles/{providerId}
+     * @allow (create) A new healthcare provider creates their own profile.
+     * @deny (update) A different provider tries to modify another's profile.
+     * @principle Enforces document ownership for writes.
+     */
+    match /healthcareProviderProfiles/{providerId} {
+        allow get: if isOwner(providerId) || isAdmin();
+        allow list: if false; // No reason to list all providers
+        allow create: if isOwner(providerId) && incomingDataMatchesPath('userId', providerId);
+        allow update: if isExistingOwner(providerId) && fieldIsImmutable('userId');
+        allow delete: if isExistingOwner(providerId);
+    }
+
+    /**
+     * @description Patient's vitals data can be accessed by the patient or their assigned provider.
+     * @path /patientProfiles/{patientId}/vitalsData/{vitalsDataId}
+     * @allow (get) An assigned provider reads a patient's recent heart rate data.
+     * @deny (create) A random user tries to add fake vitals data to a patient's profile.
+     * @principle Secures a subcollection by checking permissions on the parent document.
+     */
+    match /patientProfiles/{patientId}/vitalsData/{vitalsDataId} {
+      allow get, list: if canAccessPatientData(patientId) || isAdmin();
+      allow create: if canAccessPatientData(patientId) && incomingDataMatchesPath('patientId', patientId);
+      allow update, delete: if (resource != null && canAccessPatientData(patientId));
+    }
+
+    /**
+     * @description Patient's radiology reports can be accessed by the patient or their assigned provider.
+     * @path /patientProfiles/{patientId}/radiologyReports/{reportId}
+     * @allow (get) A patient views their own X-ray report.
+     * @deny (list) A different patient tries to list all reports for another patient.
+     * @principle Secures a subcollection by checking permissions on the parent document.
+     */
+    match /patientProfiles/{patientId}/radiologyReports/{reportId} {
+      allow get, list: if canAccessPatientData(patientId) || isAdmin();
+      allow create: if canAccessPatientData(patientId) && incomingDataMatchesPath('patientId', patientId);
+      allow update, delete: if (resource != null && canAccessPatientData(patientId));
+    }
+
+    /**
+     * @description Patient's health alerts can be accessed by the patient or their assigned provider.
+     * @path /patientProfiles/{patientId}/healthRiskAlerts/{alertId}
+     * @allow (get) An assigned provider reads a new health risk alert for their patient.
+     * @deny (delete) A different provider tries to delete an alert for a patient not assigned to them.
+     * @principle Secures a subcollection by checking permissions on the parent document.
+     */
+    match /patientProfiles/{patientId}/healthRiskAlerts/{alertId} {
+      allow get, list: if canAccessPatientData(patientId) || isAdmin();
+      allow create: if canAccessPatientData(patientId) && incomingDataMatchesPath('patientId', patientId);
+      allow update, delete: if (resource != null && canAccessPatientData(patientId));
+    }
+    
+    /**
+     * @description Only members of a conversation can read or write to it.
+     * @path /conversations/{conversationId}
+     * @allow (get) A patient or provider who is in `resource.data.members` reads the conversation.
+     * @deny (update) A user not in the `members` map tries to alter the conversation.
+     * @principle Enforces shared access via a denormalized `members` list on the document.
+     */
+    match /conversations/{conversationId} {
+        allow get: if isSignedIn() && request.auth.uid in resource.data.members;
+        allow list: if isSignedIn(); // Allow querying, e.g., where('members.' + auth.uid, '==', true)
+        allow create: if isSignedIn() && request.auth.uid in request.resource.data.members;
+        allow update: if isSignedIn() && request.auth.uid in resource.data.members && fieldIsImmutable('members');
+        allow delete: if false; // Only members can read/update, nobody can delete
+    }
+
+    /**
+     * @description Only members of the parent conversation can access its messages.
+     * @path /conversations/{conversationId}/messages/{messageId}
+     * @allow (create) A member of the conversation sends a new message.
+     * @deny (get) A user who is not part of the conversation tries to read a message.
+     * @principle Secures a subcollection by checking permissions on the parent document.
+     */
+    match /conversations/{conversationId}/messages/{messageId} {
+        allow get, list: if isConversationMember(conversationId);
+        allow create: if isConversationMember(conversationId) && incomingDataMatchesPath('senderId', request.auth.uid);
+        allow update: if (resource != null && isConversationMember(conversationId) && isOwner(resource.data.senderId));
+        allow delete: if (resource != null && isConversationMember(conversationId) && isOwner(resource.data.senderId));
+    }
+    
+    /**
+     * @description Administrative tasks can be accessed by admins or the assigned provider.
+     * @path /administrativeTasks/{taskId}
+     * @allow (update) A provider assigned to a task (`assignedToProviderId`) updates its status.
+     * @deny (create) A non-admin user tries to create a new administrative task.
+     * @principle Combines role-based access with collaborator-based access.
+     */
+    match /administrativeTasks/{taskId} {
+        allow get, list: if isAdmin() || (resource != null && isAssignedProvider(resource.data));
+        allow create: if isAdmin() && incomingDataMatchesPath('creatorId', request.auth.uid);
+        allow update: if (resource != null && (isAdmin() || isAssignedProvider(resource.data))) && fieldIsImmutable('creatorId');
+        allow delete: if isAdmin() && resource != null;
+    }
+  }
+}

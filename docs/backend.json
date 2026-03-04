@@ -1,0 +1,349 @@
+{
+  "entities": {
+    "User": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "User",
+      "type": "object",
+      "description": "Represents a user account in the ArogyaMitra application, primarily for authentication and basic profile information. An external authentication system handles passwords, adhering to security best practices.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the User entity."
+        },
+        "username": {
+          "type": "string",
+          "description": "Unique display name for the user, intended to be shown on dashboards after successful login."
+        },
+        "email": {
+          "type": "string",
+          "description": "User's email address, typically used as a login identifier and for communication purposes.",
+          "format": "email"
+        },
+        "firstName": {
+          "type": "string",
+          "description": "The first name of the user."
+        },
+        "lastName": {
+          "type": "string",
+          "description": "The last name of the user."
+        },
+        "userRole": {
+          "type": "string",
+          "description": "The primary role of the user within the application (e.g., 'Patient', 'HealthcareProvider', 'Administrator', 'Researcher'). This role determines access levels and which specific profile data (e.g., PatientProfile or HealthcareProviderProfile) is relevant for the user."
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Timestamp indicating when the user account was created.",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Timestamp indicating when the user account was last updated.",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "id",
+        "username",
+        "email",
+        "firstName",
+        "lastName",
+        "userRole",
+        "createdAt"
+      ]
+    },
+    "PatientProfile": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "PatientProfile",
+      "type": "object",
+      "description": "Stores specific demographic and medical history information for a user identified as a patient, providing a comprehensive view of their health status.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the PatientProfile entity."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Reference to the associated User account. This establishes a 1:1 relationship where a User can have one PatientProfile. (Relationship: User 1:1 PatientProfile)"
+        },
+        "dateOfBirth": {
+          "type": "string",
+          "description": "The patient's date of birth.",
+          "format": "date"
+        },
+        "gender": {
+          "type": "string",
+          "description": "The patient's gender."
+        },
+        "bloodType": {
+          "type": "string",
+          "description": "The patient's blood type (e.g., 'A+', 'O-', 'AB+')."
+        },
+        "allergies": {
+          "type": "array",
+          "description": "A list of known allergies for the patient, such as medications, food, or environmental.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "medicalHistory": {
+          "type": "array",
+          "description": "A list of significant past and present medical conditions for the patient.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "contactNumber": {
+          "type": "string",
+          "description": "Primary contact phone number for the patient."
+        },
+        "emergencyContactName": {
+          "type": "string",
+          "description": "Name of the patient's designated emergency contact person."
+        },
+        "emergencyContactNumber": {
+          "type": "string",
+          "description": "Phone number of the patient's emergency contact."
+        },
+        "address": {
+          "type": "string",
+          "description": "The patient's primary residential address."
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "dateOfBirth",
+        "gender",
+        "contactNumber"
+      ]
+    },
+    "HealthcareProviderProfile": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "HealthcareProviderProfile",
+      "type": "object",
+      "description": "Stores professional details for a user identified as a healthcare provider, linking to their primary user account.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the HealthcareProviderProfile entity."
+        },
+        "userId": {
+          "type": "string",
+          "description": "Reference to the associated User account. This establishes a 1:1 relationship where a User can have one HealthcareProviderProfile. (Relationship: User 1:1 HealthcareProviderProfile)"
+        },
+        "specialty": {
+          "type": "string",
+          "description": "The medical specialty or area of expertise of the healthcare provider (e.g., 'Cardiology', 'Radiology', 'General Practitioner')."
+        },
+        "licenseNumber": {
+          "type": "string",
+          "description": "The professional license number or certification ID of the healthcare provider."
+        },
+        "clinicName": {
+          "type": "string",
+          "description": "The name of the primary clinic, hospital, or organization where the provider practices."
+        },
+        "contactNumber": {
+          "type": "string",
+          "description": "Primary contact phone number for the healthcare provider."
+        }
+      },
+      "required": [
+        "id",
+        "userId",
+        "specialty",
+        "licenseNumber",
+        "clinicName",
+        "contactNumber"
+      ]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/users/{userId}",
+        "definition": {
+          "entityName": "User",
+          "schema": {
+            "$ref": "#/backend/entities/User"
+          },
+          "description": "Stores core user authentication and basic profile information. The document ID (`userId`) must match `request.auth.uid` and the `id` field within the document. Users can typically read/write their own profile.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user, matching Firebase Authentication UID."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/roles_admin/{userId}",
+        "definition": {
+          "entityName": "RoleAdmin",
+          "schema": {
+            "$ref": "#/backend/entities/RoleAdmin"
+          },
+          "description": "Dedicated collection for administrative roles. The existence of a document with a user's UID in this collection grants administrative permissions (DBAC). This allows for simple 'if exists' rule checks for admin access.",
+          "params": [
+            {
+              "name": "userId",
+              "description": "The unique identifier of the user who has the 'admin' role."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/patientProfiles/{patientId}",
+        "definition": {
+          "entityName": "PatientProfile",
+          "schema": {
+            "$ref": "#/backend/entities/PatientProfile"
+          },
+          "description": "Stores specific demographic and medical history for a user designated as a 'Patient'. The document ID (`patientId`) must match the `userId` of the associated User account and the `id` and `userId` fields within the document. Includes denormalized `assignedProviderId` for authorization independence, allowing healthcare providers to read/write their assigned patients' profiles without `get()` calls in rules.",
+          "params": [
+            {
+              "name": "patientId",
+              "description": "The unique identifier for the patient's profile, matching their User ID."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/healthcareProviderProfiles/{providerId}",
+        "definition": {
+          "entityName": "HealthcareProviderProfile",
+          "schema": {
+            "$ref": "#/backend/entities/HealthcareProviderProfile"
+          },
+          "description": "Stores professional details for a user designated as a 'HealthcareProvider'. The document ID (`providerId`) must match the `userId` of the associated User account and the `id` and `userId` fields within the document. Access is restricted to the owner.",
+          "params": [
+            {
+              "name": "providerId",
+              "description": "The unique identifier for the healthcare provider's profile, matching their User ID."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/patientProfiles/{patientId}/vitalsData/{vitalsDataId}",
+        "definition": {
+          "entityName": "VitalsData",
+          "schema": {
+            "$ref": "#/backend/entities/VitalsData"
+          },
+          "description": "Contains real-time or historical vital signs data collected for a specific patient. Includes denormalized `patientId` (owner's `userId`) and `assignedProviderId` for authorization independence, allowing both the patient and their assigned provider access.",
+          "params": [
+            {
+              "name": "patientId",
+              "description": "The unique identifier of the patient to whom this vital data belongs."
+            },
+            {
+              "name": "vitalsDataId",
+              "description": "The unique identifier for a specific set of vital signs data."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/patientProfiles/{patientId}/radiologyReports/{reportId}",
+        "definition": {
+          "entityName": "RadiologyReport",
+          "schema": {
+            "$ref": "#/backend/entities/RadiologyReport"
+          },
+          "description": "Stores radiology reports and their AI analysis for a specific patient. Includes denormalized `patientId` (owner's `userId`) and `assignedProviderId` for authorization independence, enabling both the patient and their assigned provider access.",
+          "params": [
+            {
+              "name": "patientId",
+              "description": "The unique identifier of the patient to whom this radiology report belongs."
+            },
+            {
+              "name": "reportId",
+              "description": "The unique identifier for a specific radiology report."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/patientProfiles/{patientId}/healthRiskAlerts/{alertId}",
+        "definition": {
+          "entityName": "HealthRiskAlert",
+          "schema": {
+            "$ref": "#/backend/entities/HealthRiskAlert"
+          },
+          "description": "Stores AI-driven health risk alerts generated for a specific patient. Includes denormalized `patientId` (owner's `userId`) and `assignedProviderId` for authorization independence, allowing patient and assigned provider access to relevant alerts.",
+          "params": [
+            {
+              "name": "patientId",
+              "description": "The unique identifier of the patient associated with this health risk alert."
+            },
+            {
+              "name": "alertId",
+              "description": "The unique identifier for a specific health risk alert."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/conversations/{conversationId}",
+        "definition": {
+          "entityName": "Conversation",
+          "schema": {
+            "$ref": "#/backend/entities/Conversation"
+          },
+          "description": "Represents a distinct doctor-patient communication thread. Includes denormalized `patientId`, `providerId`, and a `members` map for explicit authorization independence, allowing efficient querying for conversations a user is part of.",
+          "params": [
+            {
+              "name": "conversationId",
+              "description": "The unique identifier for a specific conversation thread."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/conversations/{conversationId}/messages/{messageId}",
+        "definition": {
+          "entityName": "Message",
+          "schema": {
+            "$ref": "#/backend/entities/Message"
+          },
+          "description": "Individual messages within a doctor-patient conversation. Includes denormalized `members` map (from parent Conversation) for authorization independence, ensuring only participants can access messages. Also includes `senderId`.",
+          "params": [
+            {
+              "name": "conversationId",
+              "description": "The unique identifier of the parent conversation thread."
+            },
+            {
+              "name": "messageId",
+              "description": "The unique identifier for a specific message within the conversation."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/administrativeTasks/{taskId}",
+        "definition": {
+          "entityName": "AdministrativeTask",
+          "schema": {
+            "$ref": "#/backend/entities/AdministrativeTask"
+          },
+          "description": "Tasks related to healthcare administration, potentially assigned to specific healthcare providers. Includes denormalized `assignedToProviderId` and `creatorId` for authorization independence, enabling access for assigned providers and administrators.",
+          "params": [
+            {
+              "name": "taskId",
+              "description": "The unique identifier for a specific administrative task."
+            }
+          ]
+        }
+      }
+    ],
+    "reasoning": "The Firestore structure for ArogyaMitra prioritizes Authorization Independence and Queryable Access Patterns (QAPs) by strategically denormalizing authorization context and segregating data based on security posture. \n\n1.  **User Data (`/users/{userId}`):** Core user profiles are stored in a top-level collection. The document ID (`userId`) directly corresponds to `request.auth.uid`, making ownership-based rules explicit and efficient. The `id` field within the document is expected to match this `userId`.\n\n2.  **Role-Based Access Control (`/roles_admin/{userId}`):** To implement Database Access Control (DBAC), a dedicated collection for administrators (`/roles_admin`) is introduced. The *existence* of a document with a user's `uid` in this collection grants admin privileges, eliminating the need for custom claims or complex `get()` operations in rules to check roles. This also allows QAPs for querying who is an admin.\n\n3.  **Profiles (`/patientProfiles/{patientId}`, `/healthcareProviderProfiles/{providerId}`):** Instead of nesting `PatientProfile` and `HealthcareProviderProfile` directly under `/users/{userId}`, they are placed in top-level collections. This is a critical design choice for Authorization Independence and QAPs. Each `PatientProfile` document *denormalizes* its `ownerId` (the patient's `userId`) and crucially, an `assignedProviderId`. This allows a `HealthcareProvider` to efficiently `list` all `PatientProfile` documents they are assigned to via a simple `where('assignedProviderId', '==', request.auth.uid)` query, without violating QAPs by attempting to read across arbitrary user subcollections. The same principle applies to any subcollections under `patientProfiles` (e.g., `vitalsData`, `radiologyReports`), where `ownerId` and `assignedProviderId` are denormalized into each document. The `id` and `userId` fields within the profile documents are expected to match the document ID.\n\n4.  **Collaborative Data (`/conversations/{conversationId}`):** For doctor-patient communications, a top-level `conversations` collection is used. Each `Conversation` document includes a `members` map (e.g., `members: { patientUid: true, providerUid: true }`) which explicitly defines participants. This enables QAPs for listing conversations a user is part of (`where('members.' + request.auth.uid, '==', true)`). Messages within a conversation (`/conversations/{conversationId}/messages/{messageId}`) denormalize this `members` map (or the specific `patientId` and `providerId`) to ensure authorization independence without requiring `get()` on the parent `conversation` document for every message read.\n\n5.  **Structural Segregation:** Data with different security postures is segregated. For example, a patient's sensitive `vitalsData` is distinct but linked to their `patientProfile`, while `administrativeTasks` are managed separately, allowing specific access rules for each. This simplifies security rules significantly.\n\nThis structure ensures that security rules are straightforward to write and debug, relying primarily on `request.auth.uid == resource.data.ownerId` or `request.auth.uid in resource.data.members` checks, and that common `list` operations (QAPs) are performant and secure by design."
+  }
+}
